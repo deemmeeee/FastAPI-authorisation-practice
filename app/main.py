@@ -7,23 +7,15 @@ from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from passlib.context import CryptContext
+from sqlalchemy.orm import Session
 
 from .config import APP_NAME, APP_VERSION, APP_DESCRIPTION
+from .models import User as UserModel
+from .database import get_db
 
 SECRET_KEY = "3c59c096d98638d670db50551e2bb50ec377300d37f118f0f00eafd3880418af"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
-
-
-fake_users_db = {
-    "johndoe": {
-        "username": "johndoe",
-        "full_name": "John Doe",
-        "email": "johndoe@example.com",
-        "hashed_password": "$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW",
-        "disabled": False,
-    },
-}
 
 
 class Token(BaseModel):
@@ -35,27 +27,44 @@ class TokenData(BaseModel):
     username: str | None = None
 
 
-class User(BaseModel):
+class UserBase(BaseModel):
     username: str
-    email: str | None = None
-    full_name: str | None = None
-    disabled: bool | None = None
+    email: str
 
 
-class UserInDB(User):
+# модель добавляет пароль к базовой модели для регистрации
+class UserCreate(UserBase):
+    password: str
+
+# модель добавляет хэшированный пароль к базовой модели для регистрации
+class UserInDB(UserBase):
     hashed_password: str
 
 
 # хэширование пароля
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 app = FastAPI(
     title=APP_NAME,
     version=APP_VERSION,
     description=APP_DESCRIPTION,
 )
+
+
+def get_user_by_email(db: Session, email:str):
+    return db.query(UserModel).filter(UserModel.email == email).first()
+
+
+# создание экземпляра модели пользователя
+def create_user(db: Session, username: str, email: str, password: str):
+    hashed_password = get_password_hash(password)
+    db_user = UserModel(username=username, email=email, hashed_password=hashed_password)
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
 
 
 # проверка на соответствие хэша полученного пароля хэшу сохраненного пароля
@@ -70,14 +79,12 @@ def get_password_hash(password):
 
 # принимает введенный username возвращает все данные юзера если он есть
 def get_user(db, username: str):
-    if username in db:
-        user_dict = db[username]
-        return UserInDB(**user_dict)
+    return db.query(UserModel).filter(UserModel.username == username).first()
 
 
 # аутентификация пользователя
-def authenticate_user(fake_db, username: str, password: str):
-    user = get_user(fake_db, username)
+def authenticate_user(db: Session, username: str, password: str):
+    user = get_user(db, username)
     if not user:
         return False
     if not verify_password(password, user.hashed_password):
@@ -97,9 +104,9 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
     return encoded_jwt
 
 
-# извлекает токен, декодирует его с помощью библиотеки jwt и проверяет есть ли пользователь 
-# с таким токеном
-async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]):
+# извлекает токен, декодирует его с помощью библиотеки 
+# jwt и проверяет есть ли пользователь с таким токеном
+async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)], db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Couldn't validate data",
@@ -113,23 +120,42 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]):
         token_data=TokenData(username=username)
     except InvalidTokenError:
         raise credentials_exception
-    user = get_user(fake_users_db, username=token_data.username)
+    user = get_user(db, username=token_data.username)
     if user is None:
         raise credentials_exception
     return user
 
 
 # проверяет активен ли пользователь 
-async def get_current_active_user(current_user: Annotated[User, Depends(get_current_user)],):
+async def get_current_active_user(current_user: Annotated[UserBase, Depends(get_current_user)],):
     if current_user.disabled:
         raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
 
 
+# ручка для регистрации 
+@app.post("/register", response_model=Token)
+def register_user(user: UserCreate, db: Session = Depends(get_db)):
+    existing_user = get_user_by_email(db, user.email)
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    # Проверяем, существует ли пользователь с таким же username
+    existing_user_by_username = get_user(db, user.username)
+    if existing_user_by_username:
+        raise HTTPException(status_code=400, detail="Username already registered")
+
+    db_user = create_user(db, username=user.username, email=user.email, password=user.password)
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(data={"sub": db_user.email}, expires_delta=access_token_expires)
+    
+    return Token(access_token=access_token, token_type="bearer")
+
+
 # ручка передает пользователю токен
-@app.post("/token")
-async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]):
-    user = authenticate_user(fake_users_db, form_data.username, form_data.password)
+@app.post("/login")
+async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()], db: Session = Depends(get_db)):
+    user = authenticate_user(db, form_data.username, form_data.password)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -142,8 +168,8 @@ async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm,
 
 
 # ручка для получения информации о своем аккаунте(доступна только владельцу)
-@app.get("/secure-endpoint")
-async def read_users_me(current_user: Annotated[User, Depends(get_current_active_user)]):
+@app.get("/secure-endpoint", response_model=UserBase)
+async def read_users_me(current_user: Annotated[UserBase, Depends(get_current_user)]):
     return current_user
 
 

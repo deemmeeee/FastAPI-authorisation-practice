@@ -7,11 +7,11 @@ from dotenv import load_dotenv
 
 from alembic import context
 from app.database import Base
+from app.models import User 
 
 
-# Загрузите переменные окружения
+# Загрузка переменных окружения
 load_dotenv()
-
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -23,10 +23,8 @@ config.set_main_option('sqlalchemy.url', os.getenv('DATABASE_URL'))
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# add your model's MetaData object here
-# for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
+# модели, наследуемые от Base, автоматически регистрируются,
+# главное импортировать здесь
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
