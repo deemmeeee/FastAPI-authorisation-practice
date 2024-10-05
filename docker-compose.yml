@@ -1,6 +1,8 @@
 services:
-  postgres:
+  auth-practice-postgres:
     image: postgres:15-alpine
+    hostname: auth-practice-postgres
+    container_name: auth-practice-postgres
     restart: unless-stopped
     env_file: .env
     volumes:

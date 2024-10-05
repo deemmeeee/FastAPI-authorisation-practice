@@ -46,7 +46,7 @@ docker compose down
 docker compose down --volumes
 
 ## Структура проекта
-
+```
 ├── alembic/                  # Директория для Alembic (миграции БД)
 │   ├── env.py                # Файл настройки окружения Alembic
 │   ├── versions/             # Содержит файлы миграций
@@ -72,7 +72,7 @@ docker compose down --volumes
 ├── pyproject.toml            # Файл с конфигурацией проекта и зависимостями
 ├── setup.cfg                 # Конфигурационный файл для линтеров и других инструментов
 └── README.md                 # Документация проекта
-
+```
 ## Ссылки
 
 [О приложении](http://127.0.0.1:8000/admin)
