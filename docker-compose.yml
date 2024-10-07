@@ -27,5 +27,5 @@ services:
       - .:/app
       - ./media:/media
     depends_on:
-      postgres:
+      auth-practice-postgres:
         condition: service_healthy
